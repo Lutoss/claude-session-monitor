@@ -1,0 +1,14 @@
+{
+  "name": "claude-session-monitor",
+  "owner": { "name": "Lutoss" },
+  "metadata": {
+    "description": "Session monitor pane for the Claude Code desktop app."
+  },
+  "plugins": [
+    {
+      "name": "session-monitor",
+      "source": "./",
+      "description": "A pane that sorts your local Claude Code desktop sessions by what they need from you."
+    }
+  ]
+}
