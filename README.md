@@ -75,10 +75,6 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 
 A mod installed from a terminal at the user scope also loads in the local sessions the desktop app starts.
 
-If the repository is private, it installs only for people who can read it on GitHub and whose machine
-already holds a git credential for github.com (an SSH key, or `gh auth login` then `gh auth setup-git`):
-the install never prompts for one.
-
 ## Usage
 
 Type `/sessions` in a session of the desktop app. The pane does not open by itself; `/sessions` opens it
