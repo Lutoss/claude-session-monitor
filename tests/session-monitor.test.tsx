@@ -56,8 +56,15 @@ function engineBeneath(
 ) {
   const clock = mock.clock(on, { now: NOW })
   // The store as a stand-in, so the test can read what the mod keeps across sessions
-  on('store.get', (_, e) => ({ value: store[e.key] }))
+  on('store.get', async (_, e) => {
+    if (store['__failGet']) throw new Error('store.get broken (test)')
+    // A test can hold a read back to stage a race: store.__hold = { key, promise }
+    const hold = store['__hold'] as { key: string; promise: Promise<void>; reached?: () => void } | undefined
+    if (hold && hold.key === e.key) { hold.reached?.(); await hold.promise }
+    return { value: store[e.key] }
+  })
   on('store.set', (_, e) => {
+    if (store['__failSet']) throw new Error('store.set broken (test)')
     store[e.key] = e.value
     return { value: undefined }
   })
@@ -276,10 +283,10 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect((await ui.find({ text: /Deploy/, in: 'card-local_b' }))?.text).toContain('Deploy')
     // Time as its own Text (top right in the box), not appended to the project or origin
     expect((await ui.find({ type: 'Text', text: /^vor 3 Std\.$/, in: 'card-local_a' }))?.text).toBe('vor 3 Std.')
-    // Every session is a Box framed in its bucket colour: Wartet = claude, Offene Punkte = planMode;
-    // the card itself (key s-<id>), not some inner line
+    // Every session is a framed Box; in the default scheme "Ruhig" only "Wartet" carries the accent
+    // (claude), "Offene Punkte" is neutral grey; the card itself (key s-<id>), not some inner line
     const cardOf = async (id: string) => (await ui.findAll({ type: 'Box' })).find(b => b.key === `s-${id}`)
-    for (const [id, color] of [['local_a', 'claude'], ['local_b', 'planMode']] as const) {
+    for (const [id, color] of [['local_a', 'claude'], ['local_b', '#8b949e66']] as const) {
       const c = await cardOf(id)
       expect(Boolean(c?.props['borderStyle'])).toBe(true)
       expect(c?.props['borderColor']).toBe(color)
@@ -341,7 +348,7 @@ test('renderSafely: a throwing drawing shows only an error line', () => {
   const rows = slim(DATA).rows
   const ctx = {
     el, surface: 'desktop', width: 60, now: NOW, generatedAt: NOW, isLoading: false, error: null,
-    buckets: [{ id: 'warten', label: 'Wartet auf dich', color: 'error', open: true }],
+    buckets: [{ id: 'warten', label: 'Wartet auf dich', open: true }],
     byBucket: { warten: rows.filter(r => r.bucket === 'warten') }, isOpen: () => true,
     dropped: 0, ago: () => 'vor 1 Min.', markOf: () => null,
     actions: { open: () => {}, mark: () => {}, toggleBucket: () => {}, refresh: () => {} },
@@ -517,8 +524,14 @@ test('marking: if only the reload fails, the change itself still holds', { timeo
   await ui.unmount()
 })
 
-test('buttons as tinted pills; "jetzt" does not shrink', { timeoutMs: 20_000 }, async ($, on) => {
-  engineBeneath(on, [], {}, [], { generatedAt: NOW, sessions: [
+const PILLS = [
+  // [palette, borders of Öffnen / Pausieren / Abschließen, fills of the same]
+  ['ruhig', ['#8b949e66', '#8b949e66', '#8b949e66'], [undefined, undefined, undefined]],
+  ['ampel', ['#8b949e66', '#8b949e66', '#2ea043b3'], [undefined, undefined, undefined]],
+  ['flaechen', ['#8b949e26', '#8b949e26', '#8b949e26'], ['#8b949e26', '#8b949e26', '#8b949e26']],
+] as const
+for (const [paletteId, borders, fills] of PILLS) test(`buttons as framed pills; "jetzt" does not shrink (${paletteId})`, { timeoutMs: 20_000 }, async ($, on) => {
+  engineBeneath(on, [], { palette: paletteId }, [], { generatedAt: NOW, sessions: [
     { ...DATA.sessions[0], id: 'local_j', needsAction: 'Bild prüfen und freigeben', openList: ['Bild prüfen und freigeben, ' + 'sehr lang '.repeat(30)] },
   ] })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -526,10 +539,10 @@ test('buttons as tinted pills; "jetzt" does not shrink', { timeoutMs: 20_000 }, 
   await ui.press({ key: 'refresh' })
   const boxes = await ui.findAll({ type: 'Box' })
   const pill = (k: string) => boxes.find(b => b.key === `pill-${k}`)?.props
-  expect([pill('open-local_j')?.['borderColor'], pill('pause-local_j')?.['borderColor'], pill('done-local_j')?.['borderColor']]).toEqual(['inactive', 'warning', 'success'])
-  // Exact tint and frame, the button inside without chrome of its own
-  expect([pill('done-local_j')?.['backgroundColor'], pill('pause-local_j')?.['backgroundColor'], pill('open-local_j')?.['backgroundColor']])
-    .toEqual(['#3fb95026', '#d2992226', '#8b949e26'])
+  expect([pill('open-local_j')?.['borderColor'], pill('pause-local_j')?.['borderColor'], pill('done-local_j')?.['borderColor']]).toEqual([...borders])
+  // Exact fill and frame, the button inside without chrome of its own
+  expect([pill('open-local_j')?.['backgroundColor'], pill('pause-local_j')?.['backgroundColor'], pill('done-local_j')?.['backgroundColor']])
+    .toEqual([...fills])
   expect(pill('done-local_j')?.['borderStyle']).toBe('round')
   const btns = await ui.findAll({ type: 'Button' })
   expect(btns.find(b => b.key === 'done-local_j')?.props['plain']).toBe(true)
@@ -558,3 +571,232 @@ test('bucket order: "Offene Punkte" comes second', async ($, on) => {
   expect(heads).toEqual(['Wartet auf dich', 'Offene Punkte', 'Erledigt'])
   await ui.unmount()
 })
+
+// ---------- Colour schemes ----------
+// More buckets than DATA: "Läuft gerade" with a current and an open step, "Zum Prüfen" with a current
+// open item ("jetzt") and one that is not.
+const DATA_ALL = {
+  generatedAt: NOW,
+  sessions: [
+    ...DATA.sessions,
+    {
+      id: 'local_r', title: 'Build läuft', cwd: 'C:\\Work', lastActivityAt: NOW - 10 * 60_000, bucket: 'laeuft',
+      needsAction: '', wrapAsk: '', detail: '', openList: [],
+      openSteps: [{ content: 'Kompilieren', status: 'in_progress' }, { content: 'Nachtest', status: 'pending' }], parent: null,
+    },
+    {
+      id: 'local_p', title: 'Bericht', cwd: 'C:\\Work', lastActivityAt: NOW - 30 * 60_000, bucket: 'pruefen',
+      needsAction: 'Bericht gegenlesen', wrapAsk: '', detail: '', openList: ['Bericht gegenlesen lassen', 'Zahlen prüfen'],
+      openSteps: [], parent: null,
+    },
+  ],
+}
+
+type Ui = { findAll: (q: object) => Promise<{ type: string; key?: string; text: string; props: Record<string, unknown> }[]> }
+const cardProps = async (ui: Ui, id: string) => (await ui.findAll({ type: 'Box' })).find(b => b.key === `s-${id}`)?.props
+const pillProps = async (ui: Ui, key: string) => (await ui.findAll({ type: 'Box' })).find(b => b.key === `pill-${key}`)?.props
+const frameOf = async (ui: Ui, id: string) => {
+  const p = await cardProps(ui, id)
+  return [p?.['borderColor'], p?.['backgroundColor']]
+}
+
+async function mountWith($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], store: Record<string, unknown>, data: object = DATA_ALL) {
+  engineBeneath(on, [], store, [], data)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  return ui
+}
+
+for (const surface of ['desktop', 'terminal'] as const) {
+  test(`the picker switches the colour scheme and stores it (${surface})`, { timeoutMs: 20_000 }, async ($, on) => {
+    const store: Record<string, unknown> = {}
+    engineBeneath(on, [], store)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'refresh' })
+    const pick = async () => (await ui.find({ type: 'Select', key: 'palette-select' }))?.props
+    expect([(await pick())?.['label'], (await pick())?.['value']]).toEqual(['Farben', 'ruhig'])
+    expect((await pick())?.['options']).toEqual([
+      { value: 'ruhig', label: 'Ruhig' },
+      { value: 'ampel', label: 'Ampel' },
+      { value: 'flaechen', label: 'Flächen' },
+    ])
+    expect((await cardProps(ui, 'local_a'))?.['borderColor']).toBe('claude')
+
+    await ui.select({ key: 'palette-select', value: 'ampel' })
+    expect(store['palette']).toBe('ampel')
+    expect((await pick())?.['value']).toBe('ampel')
+    expect((await cardProps(ui, 'local_a'))?.['borderColor']).toBe('#e5603cb3')
+
+    await ui.select({ key: 'palette-select', value: 'flaechen' })
+    expect(store['palette']).toBe('flaechen')
+    expect(await frameOf(ui, 'local_a')).toEqual(['#8b949e33', '#d9775724'])
+    await ui.unmount()
+  })
+}
+
+test('a stored colour scheme applies at start and a newer one at refresh', { timeoutMs: 20_000 }, async ($, on) => {
+  const store: Record<string, unknown> = { palette: 'flaechen' }
+  engineBeneath(on, [], store, [], DATA_ALL)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Before any refresh: the start already read the store
+  expect((await ui.find({ type: 'Select', key: 'palette-select' }))?.props['value']).toBe('flaechen')
+  await ui.press({ key: 'refresh' })
+  expect(await frameOf(ui, 'local_a')).toEqual(['#8b949e33', '#d9775724'])
+  // Picked in another session (the store is shared): the next refresh takes it over
+  store['palette'] = 'ampel'
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ type: 'Select', key: 'palette-select' }))?.props['value']).toBe('ampel')
+  expect(await frameOf(ui, 'local_r')).toEqual(['#4189f099', undefined])
+  await ui.unmount()
+})
+
+for (const stored of ['neon', 42, { id: 'ampel' }] as const) {
+  test(`an unknown stored colour scheme falls back to "ruhig" (${JSON.stringify(stored)})`, { timeoutMs: 20_000 }, async ($, on) => {
+    const ui = await mountWith($, on, { palette: stored })
+    expect((await ui.find({ type: 'Select', key: 'palette-select' }))?.props['value']).toBe('ruhig')
+    expect(await frameOf(ui, 'local_a')).toEqual(['claude', undefined])
+    expect(await frameOf(ui, 'local_b')).toEqual(['#8b949e66', undefined])
+    await ui.unmount()
+  })
+}
+
+test('a broken store takes neither the start nor the pane down; a failed save shows a toast', { timeoutMs: 20_000 }, async ($, on) => {
+  const store: Record<string, unknown> = { __failGet: true }
+  const toasts: string[] = []
+  engineBeneath(on, [], store, [], DATA_ALL)
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const r = await $.command.run({ command: 'sessions', args: '' } as never)
+  expect(JSON.stringify(r)).toContain('Session-Monitor geöffnet')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ type: 'Select', key: 'palette-select' }))?.props['value']).toBe('ruhig')
+  expect(await frameOf(ui, 'local_a')).toEqual(['claude', undefined])
+  // Saving fails: the pick still applies in this session, with a note
+  store['__failSet'] = true
+  await ui.select({ key: 'palette-select', value: 'ampel' })
+  // (a throwing test hook is skipped, so the engine's own refusal is the message)
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toMatch(/^Farbschema nicht gespeichert: /)
+  expect(await frameOf(ui, 'local_a')).toEqual(['#e5603cb3', undefined])
+  await ui.unmount()
+})
+
+test('"Ruhig": only the waiting card carries the accent, every other frame is neutral grey', { timeoutMs: 20_000 }, async ($, on) => {
+  const ui = await mountWith($, on, { palette: 'ruhig' })
+  await ui.press({ key: 'toggle-erledigt' })
+  expect(await frameOf(ui, 'local_a')).toEqual(['claude', undefined])
+  for (const id of ['local_b', 'local_p', 'local_r', 'local_c']) expect([id, ...(await frameOf(ui, id))]).toEqual([id, '#8b949e66', undefined])
+  // Buttons: grey outlines without a tint
+  expect([(await pillProps(ui, 'open-local_a'))?.['borderColor'], (await pillProps(ui, 'done-local_a'))?.['borderColor']]).toEqual(['#8b949e66', '#8b949e66'])
+  expect((await pillProps(ui, 'done-local_a'))?.['backgroundColor']).toBeUndefined()
+  await ui.unmount()
+})
+
+test('"Ampel": running is blue, review grey, only "Abschließen" outlined green', { timeoutMs: 20_000 }, async ($, on) => {
+  const ui = await mountWith($, on, { palette: 'ampel' })
+  expect(await frameOf(ui, 'local_r')).toEqual(['#4189f099', undefined])
+  expect(await frameOf(ui, 'local_p')).toEqual(['#8b949e59', undefined])
+  expect(await frameOf(ui, 'local_a')).toEqual(['#e5603cb3', undefined])
+  expect(await frameOf(ui, 'local_b')).toEqual(['#b8851a99', undefined])
+  expect([
+    (await pillProps(ui, 'open-local_a'))?.['borderColor'],
+    (await pillProps(ui, 'pause-local_a'))?.['borderColor'],
+    (await pillProps(ui, 'done-local_a'))?.['borderColor'],
+  ]).toEqual(['#8b949e66', '#8b949e66', '#2ea043b3'])
+  // The arrow before a waiting task in the same orange-red as the frame
+  const arrow = (await ui.findAll({ type: 'Text', in: 'card-local_a' })).find(t => t.text === '→')
+  expect(arrow?.props['color']).toBe('#e5603c')
+  await ui.unmount()
+})
+
+test('"Flächen": cards tinted in the group tone behind a fine neutral line, flat grey pills', { timeoutMs: 20_000 }, async ($, on) => {
+  const ui = await mountWith($, on, { palette: 'flaechen' })
+  expect(await frameOf(ui, 'local_a')).toEqual(['#8b949e33', '#d9775724'])
+  expect(await frameOf(ui, 'local_b')).toEqual(['#8b949e33', '#48968c1a'])
+  expect(await frameOf(ui, 'local_p')).toEqual(['#8b949e33', '#a371f71a'])
+  expect(await frameOf(ui, 'local_r')).toEqual(['#8b949e33', '#4493f81a'])
+  const done = await pillProps(ui, 'done-local_a')
+  expect([done?.['borderColor'], done?.['backgroundColor']]).toEqual(['#8b949e26', '#8b949e26'])
+  await ui.unmount()
+})
+
+// Contrast: secondary text (folder, time, "Stand", counts, open items, steps) was the theme's faint
+// "subtle" grey and too weak; now "inactive", or the text colour dimmed on tinted cards. "jetzt" is
+// drawn in the text colour, the accent only on the dot before the item.
+for (const [id, expected] of [['ruhig', ['inactive', false]], ['ampel', ['inactive', false]], ['flaechen', ['text', true]]] as const) {
+  test(`contrast: secondary text is never "subtle" (${id})`, { timeoutMs: 20_000 }, async ($, on) => {
+    const ui = await mountWith($, on, { palette: id })
+    const texts = await ui.findAll({ type: 'Text' })
+    const inCard = async (card: string) => ui.findAll({ type: 'Text', in: `card-${card}` })
+    const secondary = [
+      texts.find(t => t.text.startsWith('Stand ')),
+      texts.find(t => t.text === 'recipe-book'), // folder in the footer
+      texts.find(t => t.props['size'] === 'footnote' && /^\d+$/.test(t.text)), // count at a bucket
+      (await inCard('local_a')).find(t => t.text === 'vor 3 Std.'), // time
+      (await inCard('local_p')).find(t => t.text === 'Zahlen prüfen'), // open item, not current
+      (await inCard('local_r')).find(t => t.text === 'Nachtest'), // open step
+      (await inCard('local_r')).find(t => t.text === 'Schritt 1 von 2'), // progress
+    ]
+    for (const t of secondary) {
+      expect([t?.text, t?.props['color'], t?.props['dimColor']]).toEqual([t?.text, ...expected])
+      expect(t?.props['color']).not.toBe('subtle')
+    }
+    const now = (await inCard('local_p')).find(t => t.text === 'jetzt')
+    expect(now?.props['color']).toBe('text')
+    await ui.unmount()
+  })
+}
+
+// ---------- From review 0.3.0: race between a choice and a slow refresh, remaining bucket colours ----------
+test('a slow refresh does not undo a newer colour choice', { timeoutMs: 30_000 }, async ($, on) => {
+  const store: Record<string, unknown> = { palette: 'ruhig' }
+  engineBeneath(on, [], store)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  // Hold the refresh's read of "palette" (it would still see "ruhig"), pick "ampel" meanwhile
+  let release = () => {}
+  let reached = () => {}
+  const readStarted = new Promise<void>(r => { reached = r })
+  store['__hold'] = { key: 'palette', promise: new Promise<void>(r => { release = r }), reached }
+  const pending = ui.press({ key: 'refresh' })
+  await readStarted // the refresh is now reading the old value
+  await ui.select({ key: 'palette-select', value: 'ampel' })
+  expect(store['palette']).toBe('ampel')
+  // The stale read must not win: emulate it by restoring the old value just before releasing
+  store['palette'] = 'ruhig'
+  delete store['__hold']
+  release()
+  await pending
+  expect((await ui.find({ key: 'palette-select' }))?.props['value']).toBe('ampel')
+  await ui.unmount()
+})
+
+const MORE_COLOURS = [
+  ['ampel', 'local_done', 'erledigt', 'borderColor', '#2ea04399'],
+  ['flaechen', 'local_int', 'unterbrochen', 'backgroundColor', '#d299221a'],
+  ['flaechen', 'local_done', 'erledigt', 'backgroundColor', '#2ea0431a'],
+] as const
+for (const [pal, id, bucket, prop, value] of MORE_COLOURS) {
+  test(`bucket colour: "${pal}" ${bucket} ${prop} = ${value}`, { timeoutMs: 20_000 }, async ($, on) => {
+    const data = { generatedAt: NOW, sessions: [
+      { ...DATA.sessions[2], id: 'local_done' },
+      { ...DATA.sessions[0], id: 'local_int', bucket: 'unterbrochen', needsAction: '' },
+    ] }
+    engineBeneath(on, [], { palette: pal }, [], data)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    await ui.press({ key: 'refresh' })
+    if (bucket === 'erledigt') await ui.press({ key: 'toggle-erledigt' })
+    const box = (await ui.findAll({ type: 'Box' })).find(b => b.key === `s-${id}`)
+    expect(box?.props[prop]).toBe(value)
+    await ui.unmount()
+  })
+}

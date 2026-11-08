@@ -24,6 +24,9 @@ export type SessionMonitorSnapshot = {
   dropped: number
 }
 
+// Colour scheme of the pane (hooks/palettes.ts), chosen in the pane, stored under the store key "palette".
+export type SessionMonitorPaletteId = 'ruhig' | 'ampel' | 'flaechen'
+
 export type SessionMonitorStatus = {
   isLoading: boolean
   error: string | null
@@ -36,6 +39,7 @@ declare module 'claude-code' {
       status: SessionMonitorStatus
       expanded: Record<string, boolean>
       marks: Record<string, SessionMonitorMark>
+      palette: SessionMonitorPaletteId
     }
   }
 }

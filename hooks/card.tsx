@@ -3,11 +3,23 @@
 // which open the session. Client elements have no Svg, so markers are text glyphs.
 import type { ClientModule } from 'claude-code'
 
+// Colours inside the card, from the chosen palette (hooks/palettes.ts); theme keys or hex.
+export type CardColors = {
+  title: string
+  second: string // detail line, open items and steps that are not current
+  meta: string // time and "Schritt 1 von 2"
+  off: string // the ○ before items that are not current
+  nowTag: string // the "jetzt" tag
+  dim: boolean // secondary text dimmed
+  urgentArrow: string // → before the task of a waiting session
+  nowDot: string // • before the current item
+}
+
 export type CardProps = {
   id: string
   title: string
   when: string
-  accent: string // theme key of the bucket
+  accent: string // colour of the bucket (theme key or hex)
   urgent: boolean
   mark: '→' | '?' | '' // before the task: an action, a question, or nothing
   task: string
@@ -15,6 +27,7 @@ export type CardProps = {
   list: { text: string; now: boolean }[]
   steps: { text: string; on: boolean }[]
   progress: string // "Schritt 1 von 2" or ''
+  colors: CardColors
 }
 
 // Cards on which the left button is currently pressed (shared across instances, by ID)
@@ -22,6 +35,7 @@ const pressed = new Set<string>()
 
 const Card: ClientModule<CardProps> = (p, s) => {
   const { Box, Text } = s.elements
+  const c = p.colors
   // A left click anywhere on the card opens the session: press and release both inside.
   // The client keeps the pointer until release, also outside (then negative or >= columns/rows).
   s.onPointer(e => {
@@ -38,33 +52,33 @@ const Card: ClientModule<CardProps> = (p, s) => {
     <Box flexDirection="column" gap={1}>
       <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
         <Box flexShrink={1} minWidth={0}>
-          <Text weight="bold" size="title" color="text" wrap="wrap">{p.title}</Text>
+          <Text weight="bold" size="title" color={c.title} wrap="wrap">{p.title}</Text>
         </Box>
         {p.when ? (
           <Box flexShrink={0}>
-            <Text color="subtle" size="caption">{p.when}</Text>
+            <Text color={c.meta} dimColor={c.dim} size="caption">{p.when}</Text>
           </Box>
         ) : null}
       </Box>
       {p.task ? (
         <Box flexDirection="row" gap={1} alignItems="flex-start">
-          {p.mark ? <Text color={p.urgent && p.mark === '→' ? 'claude' : p.accent} weight="bold">{p.mark}</Text> : null}
+          {p.mark ? <Text color={p.urgent && p.mark === '→' ? c.urgentArrow : p.accent} weight="bold">{p.mark}</Text> : null}
           <Text wrap="wrap" weight="regular" size="body">{p.task}</Text>
         </Box>
       ) : null}
-      {p.detail ? <Text color="inactive" size="footnote" wrap="wrap">{p.detail}</Text> : null}
+      {p.detail ? <Text color={c.second} dimColor={c.dim} size="footnote" wrap="wrap">{p.detail}</Text> : null}
       {p.list.length ? (
         <Box flexDirection="column">
           {p.list.map((it, i) => (
             <Box key={`ol-${p.id}-${i}`} flexDirection="row" gap={1} justifyContent="space-between" alignItems="flex-start">
               <Box flexDirection="row" gap={1} flexShrink={1} alignItems="flex-start">
-                <Text color={it.now ? 'claude' : 'subtle'}>{it.now ? '•' : '○'}</Text>
-                <Text wrap="wrap" size="footnote" color={it.now ? 'text' : 'inactive'}>{it.text}</Text>
+                <Text color={it.now ? c.nowDot : c.off}>{it.now ? '•' : '○'}</Text>
+                <Text wrap="wrap" size="footnote" color={it.now ? 'text' : c.second} dimColor={!it.now && c.dim}>{it.text}</Text>
               </Box>
               {/* fixed width: otherwise "jetzt" wraps into "je/tz/t" next to long items */}
               {it.now ? (
                 <Box flexShrink={0}>
-                  <Text color="claude" size="caption" weight="medium">jetzt</Text>
+                  <Text color={c.nowTag} size="caption" weight="medium">jetzt</Text>
                 </Box>
               ) : null}
             </Box>
@@ -75,11 +89,11 @@ const Card: ClientModule<CardProps> = (p, s) => {
         <Box flexDirection="column">
           {p.steps.map((st, i) => (
             <Box key={`st-${p.id}-${i}`} flexDirection="row" gap={1} alignItems="flex-start">
-              <Text color={st.on ? p.accent : 'subtle'}>{st.on ? '◐' : '○'}</Text>
-              <Text wrap="wrap" size="footnote" color={st.on ? 'text' : 'inactive'}>{st.text}</Text>
+              <Text color={st.on ? p.accent : c.off}>{st.on ? '◐' : '○'}</Text>
+              <Text wrap="wrap" size="footnote" color={st.on ? 'text' : c.second} dimColor={!st.on && c.dim}>{st.text}</Text>
             </Box>
           ))}
-          {p.progress ? <Text color="subtle" size="caption">{p.progress}</Text> : null}
+          {p.progress ? <Text color={c.meta} dimColor={c.dim} size="caption">{p.progress}</Text> : null}
         </Box>
       ) : null}
     </Box>

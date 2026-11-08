@@ -1,6 +1,6 @@
 {
   "name": "session-monitor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A pane for the Claude Code desktop app that sorts your local sessions by what they need from you: waiting on you, open items, ready for review, running, interrupted, paused, done.",
   "author": { "name": "Lutoss" },
   "homepage": "https://github.com/Lutoss/claude-session-monitor",

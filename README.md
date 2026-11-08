@@ -32,6 +32,23 @@ Every session lands in one bucket:
 - **Sub-sessions** show the name of their main session (the root of the parent chain) next to the folder.
 - The first buckets are expanded; *Pausiert*, *Ohne Status* and *Erledigt* start collapsed.
 
+## Colour schemes
+
+The pane comes with three colour schemes. Pick one with **Farben** at the top of the pane, next to
+**aktualisieren**:
+
+| Scheme | Look |
+| --- | --- |
+| **Ruhig** (default) | Neutral grey card frames; only *Wartet auf dich* carries the accent (Claude orange). Groups differ by a muted dot; buttons are plain grey outlines. |
+| **Ampel** | Colour only where it means urgency: waiting orange-red, open items amber, running blue, done green, everything else grey. Frames are muted; only **Abschließen** is outlined in green. |
+| **Flächen** | No coloured frames: each card has a faint fill in its group's tone behind a fine neutral line, with flat grey buttons. |
+
+The choice is saved in the plugin's own store and applies to every session, also ones already open
+(they pick it up at their next refresh). In all three, secondary text (folder, time, counts, open items)
+uses a readable grey. Colours given as app theme keys (text, greys, the Claude accent) follow the
+light and dark theme; the fixed hex accents of *Ampel* and the translucent frames and fills stay the
+same and look slightly different on a light or dark background.
+
 ## Requirements
 
 - The Claude Code desktop app. Tested on Windows only.
@@ -76,8 +93,9 @@ refreshes every 2 minutes until the session ends. The **aktualisieren** button r
 - Nothing leaves your machine. There are no external network requests; the optional web view below
   listens on `127.0.0.1` only and polls its own local `/api/sessions`.
 - It writes a cache file in your system's temp folder (`os.tmpdir()`, `session-monitor-cache.json`) and
-  the pause/finish marks in the plugin's own store. The optional web view also keeps hidden sessions in
-  the browser's `localStorage`, and `--html <file>` writes the file you name.
+  the pause/finish marks and the chosen colour scheme in the plugin's own store. The optional web view
+  also keeps hidden sessions in the browser's `localStorage`, and `--html <file>` writes the file you
+  name.
 
 ## Optional web view
 
@@ -102,8 +120,8 @@ To try a working copy in the desktop app, add its folder to `CLAUDE_CODE_PLUGIN_
 of `~/.claude/settings.json`, or start a terminal session with `claude --plugin-dir <folder>`.
 
 Layout: `hooks/register.tsx` (hooks, data, actions), `hooks/pane.tsx` (pane drawing),
-`hooks/card.tsx` (clickable card content), `scripts/session-monitor.mjs` (classification, web view,
-opening a session).
+`hooks/card.tsx` (clickable card content), `hooks/palettes.ts` (colour schemes),
+`scripts/session-monitor.mjs` (classification, web view, opening a session).
 
 ## Limitations
 

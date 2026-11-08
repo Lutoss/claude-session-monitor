@@ -3,11 +3,13 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 
 import type {
   SessionMonitorMark,
+  SessionMonitorPaletteId,
   SessionMonitorRow,
   SessionMonitorSnapshot,
   SessionMonitorStatus,
 } from '../types'
 import { pane } from './pane'
+import { DEFAULT_PALETTE, PALETTES, isPaletteId, paletteOf } from './palettes'
 import type { PaneCtx } from './types'
 
 const PANE = 'session-monitor'
@@ -20,17 +22,18 @@ export function scriptPath($: EngineInterface): string {
   return `${$.plugin.root.replace(/[\\/]+$/, '')}/scripts/session-monitor.mjs`
 }
 
+// Colours per bucket live in the palettes (./palettes.ts).
 export const BUCKETS = [
-  { id: 'warten', label: 'Wartet auf dich', color: 'error', open: true },
-  // second, right after "Wartet auf dich"; its own colour so it stands apart from "Unterbrochen"
-  { id: 'offen', label: 'Offene Punkte', color: 'planMode', open: true },
-  { id: 'pruefen', label: 'Zum Prüfen', color: 'permission', open: true },
-  { id: 'laeuft', label: 'Läuft gerade', color: 'suggestion', open: true },
-  { id: 'unterbrochen', label: 'Unterbrochen', color: 'warning', open: true },
+  { id: 'warten', label: 'Wartet auf dich', open: true },
+  // second, right after "Wartet auf dich"
+  { id: 'offen', label: 'Offene Punkte', open: true },
+  { id: 'pruefen', label: 'Zum Prüfen', open: true },
+  { id: 'laeuft', label: 'Läuft gerade', open: true },
+  { id: 'unterbrochen', label: 'Unterbrochen', open: true },
   // paused with a button in the pane; only in the monitor, nothing changes in the app
-  { id: 'pausiert', label: 'Pausiert', color: 'inactive', open: false },
-  { id: 'unbekannt', label: 'Ohne Status', color: 'inactive', open: false },
-  { id: 'erledigt', label: 'Erledigt', color: 'success', open: false },
+  { id: 'pausiert', label: 'Pausiert', open: false },
+  { id: 'unbekannt', label: 'Ohne Status', open: false },
+  { id: 'erledigt', label: 'Erledigt', open: false },
 ] as const
 
 // snapshot-2: rows carry ancestors; an older stored value without the field is discarded.
@@ -43,6 +46,7 @@ const status = atom({ plugin: 'session-monitor', key: 'status' } as const, {
 } as SessionMonitorStatus)
 const expanded = atom({ plugin: 'session-monitor', key: 'expanded' } as const, {} as Record<string, boolean>)
 const marks = atom({ plugin: 'session-monitor', key: 'marks' } as const, {} as Record<string, SessionMonitorMark>)
+const palette = atom({ plugin: 'session-monitor', key: 'palette' } as const, DEFAULT_PALETTE as SessionMonitorPaletteId)
 
 // ---------- Data ----------
 
@@ -135,6 +139,8 @@ async function refresh($: EngineInterface): Promise<void> {
     // Pick up marks set in other sessions (the store is shared across sessions), before trimming
     const m = await loadMarks($).catch(() => null)
     if (m) await update($, marks, () => m)
+    // Likewise the colour scheme; a store failure or a newer local choice keeps the current one
+    await syncPalette($)
     await update($, snapshot, () => slim(data, m ?? {}))
     await update($, status, () => ({ isLoading: false, error: null }))
   } catch (err) {
@@ -202,6 +208,40 @@ async function setMark($: EngineInterface, r: SessionMonitorRow, kind: SessionMo
   })
 }
 
+// Colour scheme: one store key "palette" for every session (the store is shared across sessions).
+// An unknown or missing value gives the default.
+const PALETTE_KEY = 'palette'
+
+export async function loadPalette($: EngineInterface): Promise<SessionMonitorPaletteId> {
+  const v = await $.store.get(PALETTE_KEY)
+  return isPaletteId(v) ? v : DEFAULT_PALETTE
+}
+
+// Bumped on every local choice, before and after saving it. A refresh adopts the stored value only if
+// no choice happened while it was reading, so a slow read cannot undo a newer pick.
+let paletteVersion = 0
+
+async function setPalette($: EngineInterface, id: string): Promise<void> {
+  if (!isPaletteId(id)) return
+  paletteVersion++
+  // Applies at once in this session, even if saving fails
+  await update($, palette, () => id)
+  try {
+    await $.store.set(PALETTE_KEY, id)
+  } catch (err) {
+    await $.ui.toast(`Farbschema nicht gespeichert: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    paletteVersion++
+  }
+}
+
+// Reads the stored scheme and adopts it unless a local choice came in meanwhile.
+async function syncPalette($: EngineInterface): Promise<void> {
+  const before = paletteVersion
+  const p = await loadPalette($).catch(() => null)
+  if (p && before === paletteVersion) await update($, palette, () => p)
+}
+
 // Does a mark still hold? Only while the session has not moved on since it was marked.
 export function markOf(m: Record<string, SessionMonitorMark>, r: SessionMonitorRow): SessionMonitorMark['kind'] | null {
   const mark = m[r.id]
@@ -248,6 +288,8 @@ export const register: Register = on => {
     // A store failure must not take the command, timer and pane down with it
     const storedMarks = await loadMarks($).catch(() => ({}) as Record<string, SessionMonitorMark>)
     await update($, marks, () => storedMarks)
+    const storedPalette = await loadPalette($).catch(() => DEFAULT_PALETTE)
+    await update($, palette, () => storedPalette)
     await $.command.register({
       name: 'sessions',
       description: 'Pane mit offenen Claude-Code-Sessions öffnen und aktualisieren',
@@ -284,6 +326,7 @@ export const register: Register = on => {
     const st = await read($, status)
     const exp = await read($, expanded)
     const mk = await read($, marks)
+    const pal = paletteOf(await read($, palette))
     const now = await $.clock.now()
 
     const rows = snap?.rows ?? []
@@ -314,12 +357,15 @@ export const register: Register = on => {
       dropped: (snap?.dropped ?? 0) + overflow,
       ago: ms => ago(ms, now),
       markOf: r => markOf(mk, r),
+      palette: pal,
+      palettes: PALETTES.map(p => ({ id: p.id, label: p.label })),
       actions: {
         open: r => void openSession($, r.id),
         mark: (r, kind) => void setMark($, r, kind),
         toggleBucket: id =>
           void update($, expanded, x => ({ ...x, [id]: !(x[id] ?? BUCKETS.find(b => b.id === id)?.open ?? false) })),
         refresh: () => void refresh($),
+        setPalette: id => void setPalette($, id),
       },
     }
 

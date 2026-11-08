@@ -3,11 +3,11 @@
 import type { Elements } from 'claude-code'
 
 import type { SessionMonitorRow } from '../types'
+import type { Palette } from './palettes'
 
 export type BucketDef = {
   id: string // warten | offen | pruefen | laeuft | unterbrochen | pausiert | unbekannt | erledigt
   label: string
-  color: string // engine theme key: error, permission, suggestion, warning, planMode, inactive, success
   open: boolean // expanded by default?
 }
 
@@ -27,11 +27,14 @@ export type PaneCtx = {
   ago: (ms: number | null) => string // "vor 3 Std."
   // A mark set in the pane that still holds; the session then already sits in bucket pausiert/erledigt
   markOf: (row: SessionMonitorRow) => 'pausiert' | 'erledigt' | null
+  palette: Palette // the chosen colour scheme (unknown stored values already resolved to the default)
+  palettes: readonly { id: string; label: string }[] // the picker's options, in display order
   actions: {
     open: (row: SessionMonitorRow) => void // open the session in the app
     mark: (row: SessionMonitorRow, kind: 'pausiert' | 'erledigt' | null) => void // null clears the mark
     toggleBucket: (bucketId: string) => void
     refresh: () => void
+    setPalette: (id: string) => void // pick a colour scheme; stored for every session
   }
 }
 
@@ -39,5 +42,6 @@ export type PaneCtx = {
 //   Button key `open-${row.id}`      opens the session  (actions.open)
 //   Button key `toggle-${bucket.id}` expands a bucket   (actions.toggleBucket), for every bucket with sessions
 //   Button key `refresh`             refreshes          (actions.refresh)
+//   Select key `palette-select`      colour scheme      (actions.setPalette)
 // Every session card shows the title as its own Text (exactly row.title), needsAction (or wrapAsk),
 // openList items and openSteps. Keys are unique within a list.
